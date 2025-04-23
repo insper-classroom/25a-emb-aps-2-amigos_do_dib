@@ -9,6 +9,7 @@
 #include "pico/stdlib.h"
 #include <stdio.h>
 #include "hardware/adc.h"
+#include "hardware/gpio.h"
 
 typedef struct adc {
     int axis;
@@ -23,9 +24,7 @@ int media_movel(const int *buffer){
         soma += buffer[i];
     }
     return soma / 5;
-
 }
-
 
 int aplicar_transformacao(int leitura){
     int cent = leitura - 2048;
@@ -36,7 +35,6 @@ int aplicar_transformacao(int leitura){
     return reduzido;
 }
 
-
 void x_task(void *p) {
     adc_init();
     adc_gpio_init(26);
@@ -44,18 +42,19 @@ void x_task(void *p) {
     int index = 0;
     adc_t data;
     while (1) {
-        adc_select_input(0); // Canal para eixo X, ex: GPIO26
+        adc_select_input(0);
         int valor_adc = adc_read();
         buffer[index] = valor_adc;
         index = (index + 1) % 5;
         int media = media_movel(buffer);
         int transformacao = aplicar_transformacao(media);
+        transformacao = -transformacao;
         data.axis = 0;
         data.val = transformacao;
-        if (data.val != 0){
-             xQueueSend(xQueueADC, &data, portMAX_DELAY);
+        if (data.val != 0) {
+            xQueueSend(xQueueADC, &data, portMAX_DELAY);
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -66,7 +65,7 @@ void y_task(void *p) {
     int index = 0;
     adc_t data;
     while (1) {
-        adc_select_input(1); // Canal para eixo X, ex: GPIO26
+        adc_select_input(1);
         int valor_adc = adc_read();
         buffer[index] = valor_adc;
         index = (index + 1) % 5;
@@ -77,54 +76,56 @@ void y_task(void *p) {
         if (data.val != 0){
             xQueueSend(xQueueADC, &data, portMAX_DELAY);
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
-void x2_task(void *p) {
-    adc_init();
-    adc_gpio_init(28);
-    int buffer[5] = {0};
-    int index = 0;
-    adc_t data;
+void button_task(void *p) {
+    const uint8_t pins[5] = {2, 3, 4, 5, 6};
+    bool prev[5] = {false, false, false, false, false};
+
+    for (int i = 0; i < 5; i++) {
+        gpio_init(pins[i]);
+        gpio_set_dir(pins[i], GPIO_IN);
+        gpio_pull_up(pins[i]);
+    }
+
     while (1) {
-        adc_select_input(2); // Canal para eixo X, ex: GPIO26
-        int valor_adc = adc_read();
-        buffer[index] = valor_adc;
-        index = (index + 1) % 5;
-        int media = media_movel(buffer);
-        int transformacao = aplicar_transformacao(media);
-        data.axis = 0;
-        data.val = transformacao;
-        if (data.val != 0){
-             xQueueSend(xQueueADC, &data, portMAX_DELAY);
+        for (int i = 0; i < 5; i++) {
+            bool pressed = !gpio_get(pins[i]);
+            if (pressed && !prev[i]) {
+                adc_t data = { .axis = 4 + i, .val = 1 };
+                xQueueSend(xQueueADC, &data, portMAX_DELAY);
+            }
+            prev[i] = pressed;
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
-void y2_task(void *p) {
-    adc_init();
-    adc_gpio_init(27);
-    int buffer[5] = {0};
-    int index = 0;
-    adc_t data;
+void joystick_task(void *p) {
+    const uint8_t pins[4] = {10, 11, 12, 13};  // UP, DOWN, LEFT, RIGHT
+    const uint8_t axis_map[4] = {9, 10, 11, 12};
+    bool prev[4] = {false};
+
+    for (int i = 0; i < 4; i++) {
+        gpio_init(pins[i]);
+        gpio_set_dir(pins[i], GPIO_IN);
+        gpio_pull_up(pins[i]);
+    }
+
     while (1) {
-        adc_select_input(3); // Canal para eixo X, ex: GPIO26
-        int valor_adc = adc_read();
-        buffer[index] = valor_adc;
-        index = (index + 1) % 5;
-        int media = media_movel(buffer);
-        int transformacao = aplicar_transformacao(media);
-        data.axis = 1;
-        data.val = transformacao;
-        if (data.val != 0){
-            xQueueSend(xQueueADC, &data, portMAX_DELAY);
+        for (int i = 0; i < 4; i++) {
+            bool pressed = !gpio_get(pins[i]);
+            if (pressed && !prev[i]) {
+                adc_t data = {.axis = axis_map[i], .val = 1};
+                xQueueSend(xQueueADC, &data, portMAX_DELAY);
+            }
+            prev[i] = pressed;
         }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
-
 
 void uart_task(void *p){
     adc_t data;
@@ -135,7 +136,6 @@ void uart_task(void *p){
            uint8_t mais = (uint8_t)((value >> 8) & 0xFF);
            uint8_t menos = (uint8_t)(value & 0xFF);
            uint8_t eop = 0xFF;
-           //printf("%d %d" , mais, menos);
            putchar_raw(axis);
            putchar_raw(menos);
            putchar_raw(mais);
@@ -144,21 +144,17 @@ void uart_task(void *p){
     }
 }
 
-
 int main() {
     stdio_init_all();
-
-
     xQueueADC = xQueueCreate(32, sizeof(adc_t));
 
-
-
-    xTaskCreate(x_task, "foo task", 4095, NULL, 1, NULL);
-    xTaskCreate(y_task, "foo task", 4095, NULL, 1, NULL);
-    xTaskCreate(uart_task, "foo task", 4095, NULL, 1, NULL);
+    xTaskCreate(button_task, "button task", 2048, NULL, 1, NULL);
+    xTaskCreate(joystick_task, "joystick task", 2048, NULL, 1, NULL);
+    xTaskCreate(x_task, "x task", 4095, NULL, 1, NULL);
+    xTaskCreate(y_task, "y task", 4095, NULL, 1, NULL);
+    xTaskCreate(uart_task, "uart task", 4095, NULL, 1, NULL);
 
     vTaskStartScheduler();
 
-    while (true)
-        ;
+    while (true);
 }

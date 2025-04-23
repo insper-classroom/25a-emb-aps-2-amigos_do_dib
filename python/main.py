@@ -2,10 +2,13 @@ import sys
 import glob
 import serial
 import pyautogui
+
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from time import sleep
+
+pyautogui.PAUSE = 0.0
 
 def move_mouse(axis, value):
     """Move o mouse de acordo com o eixo e valor recebidos."""
@@ -102,6 +105,37 @@ def conectar_porta(port_name, root, botao_conectar, status_label, mudar_cor_circ
         mudar_cor_circulo("red")
 
 
+def controle(ser):
+    while True:
+        sync = ser.read(1)
+        if not sync or sync[0] != 0xFF:
+            continue
+
+        raw = ser.read(3)
+        if len(raw) < 3:
+            continue
+
+        axis, value = parse_data(raw)
+
+        if axis in (0, 1):  # Eixos analógicos
+            move_mouse(axis, value)
+        else:
+            key_map = {
+                4: 'a',
+                5: 'z',
+                6: 's',
+                7: 'x',
+                8: 'enter',
+                9: 'left',
+                10: 'up',
+                11: 'right',
+                12: 'down',
+            }
+            if axis in key_map:
+                pyautogui.press(key_map[axis])
+
+
+
 
 def criar_janela():
     root = tk.Tk()
@@ -138,7 +172,7 @@ def criar_janela():
     frame_principal = ttk.Frame(root, padding="20")
     frame_principal.pack(expand=True, fill="both")
 
-    titulo_label = ttk.Label(frame_principal, text="Controle de Mouse", font=("Segoe UI", 14, "bold"))
+    titulo_label = ttk.Label(frame_principal, text="Controle", font=("Segoe UI", 14, "bold"))
     titulo_label.pack(pady=(0, 10))
 
     porta_var = tk.StringVar(value="")
