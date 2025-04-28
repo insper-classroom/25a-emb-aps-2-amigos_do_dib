@@ -32,6 +32,14 @@ static int aplicar_transformacao(int leitura) {
     return reduzido;
 }
 
+#define CHECK_CONTROL_STATE(local_var) \
+    do { \
+        bool _new_state; \
+        if (xQueueReceive(xQueueControl, &_new_state, 0) == pdPASS) { \
+            local_var = _new_state; \
+        } \
+    } while (0)
+
 void switch_task(void *p) {
     gpio_init(SWITCH_PIN);
     gpio_set_dir(SWITCH_PIN, GPIO_IN);
@@ -53,13 +61,6 @@ void switch_task(void *p) {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
-
-#define CHECK_CONTROL_STATE(local_var)                         \
-    do {                                                       \
-        bool _new;                                             
-        if (xQueueReceive(xQueueControl, &_new, 0) == pdPASS)  
-            local_var = _new;                                  
-    } while (0)
 
 void x_task(void *p) {
     adc_init();
