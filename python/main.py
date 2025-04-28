@@ -2,14 +2,15 @@ import sys
 import glob
 import serial
 import pyautogui
-
 import tkinter as tk
-from tkinter import ttk
-from tkinter import messagebox
+from tkinter import ttk, messagebox
 from time import sleep
 
 pyautogui.PAUSE = 0.0
 
+#----------------------------------------------------------------------#
+# Funções de controle
+#----------------------------------------------------------------------#
 def move_mouse(axis, value):
     """Move o mouse de acordo com o eixo e valor recebidos."""
     if axis == 0:
@@ -17,34 +18,21 @@ def move_mouse(axis, value):
     elif axis == 1:
         pyautogui.moveRel(0, value)
     elif axis == 2:
-          pyautogui.moveRel(value, 0)
+        pyautogui.moveRel(value, 0)
     elif axis == 3:
-        print(f"Y2 recebido: {value}")
+        pyautogui.moveRel(0, value)
 
-def controle(ser):
-    """
-    Loop principal que lê bytes da porta serial em loop infinito.
-    Aguarda o byte 0xFF e então lê 3 bytes: axis (1 byte) + valor (2 bytes).
-    """
-    while True:
-        # Aguardar byte de sincronização
-        sync_byte = ser.read(size=1)
-        if not sync_byte:
-            continue
-        if sync_byte[0] == 0xFF:
-            # Ler 3 bytes (axis + valor(2b))
-            data = ser.read(size=3)
-            if len(data) < 3:
-                continue
-            print(data)
-            axis, value = parse_data(data)
-            move_mouse(axis, value)
+def parse_data(data):
+    """Interpreta os dados recebidos do buffer (axis + valor)."""
+    axis = data[0]
+    # valor vem em little-endian, signed
+    value = int.from_bytes(data[1:3], byteorder='little', signed=True)
+    return axis, value
 
 def serial_ports():
-    """Retorna uma lista das portas seriais disponíveis na máquina."""
+    """Retorna uma lista das portas seriais disponíveis."""
     ports = []
     if sys.platform.startswith('win'):
-        # Windows
         for i in range(1, 256):
             port = f'COM{i}'
             try:
@@ -53,170 +41,131 @@ def serial_ports():
                 ports.append(port)
             except (OSError, serial.SerialException):
                 pass
-    elif sys.platform.startswith('linux') or sys.platform.startswith('cygwin'):
-        # Linux/Cygwin
+    elif sys.platform.startswith(('linux','cygwin')):
         ports = glob.glob('/dev/tty[A-Za-z]*')
     elif sys.platform.startswith('darwin'):
-        # macOS
         ports = glob.glob('/dev/tty.*')
     else:
-        raise EnvironmentError('Plataforma não suportada para detecção de portas seriais.')
-
+        raise EnvironmentError('Plataforma não suportada.')
     result = []
     for port in ports:
         try:
             s = serial.Serial(port)
             s.close()
             result.append(port)
-        except (OSError, serial.SerialException):
+        except:
             pass
     return result
 
-def parse_data(data):
-    """Interpreta os dados recebidos do buffer (axis + valor)."""
-    axis = data[0]
-    value = int.from_bytes(data[1:3], byteorder='little', signed=True)
-    return axis, value
-
-def conectar_porta(port_name, root, botao_conectar, status_label, mudar_cor_circulo):
-    """Abre a conexão com a porta selecionada e inicia o loop de leitura."""
-    if not port_name:
-        messagebox.showwarning("Aviso", "Selecione uma porta serial antes de conectar.")
-        return
-
-    try:
-        ser = serial.Serial(port_name, 115200, timeout=1)
-        status_label.config(text=f"Conectado em {port_name}", foreground="green")
-        mudar_cor_circulo("green")
-        botao_conectar.config(text="Conectado")  # Update button text to indicate connection
-        root.update()
-
-        # Inicia o loop de leitura (bloqueante).
-        controle(ser)
-
-    except KeyboardInterrupt:
-        print("Encerrando via KeyboardInterrupt.")
-    except Exception as e:
-        messagebox.showerror("Erro de Conexão", f"Não foi possível conectar em {port_name}.\nErro: {e}")
-        mudar_cor_circulo("red")
-    finally:
-        ser.close()
-        status_label.config(text="Conexão encerrada.", foreground="red")
-        mudar_cor_circulo("red")
-
+#----------------------------------------------------------------------#
+# Loop principal de leitura e mapeamento
+#----------------------------------------------------------------------#
+pressed_keys = set()
 
 def controle(ser):
+    key_map = {
+        4:  'a',     5:  'z',
+        6:  's',     7:  'x',
+        8:  'enter',
+        9:  'up',   10: 'down',
+       11: 'left',  12: 'right',
+    }
     while True:
         sync = ser.read(1)
         if not sync or sync[0] != 0xFF:
             continue
-
         raw = ser.read(3)
         if len(raw) < 3:
             continue
-
         axis, value = parse_data(raw)
 
-        if axis in (0, 1):  # Eixos analógicos
+        if axis in (0, 1, 2, 3):
+            # eixos analógicos (0=X,1=Y,2=X2,3=Y2)
             move_mouse(axis, value)
-        else:
-            key_map = {
-                4: 'a',
-                5: 'z',
-                6: 's',
-                7: 'x',
-                8: 'enter',
-                9: 'left',
-                10: 'up',
-                11: 'right',
-                12: 'down',
-            }
-            if axis in key_map:
-                pyautogui.press(key_map[axis])
+        elif axis in key_map:
+            key = key_map[axis]
+            if value == 1 and key not in pressed_keys:
+                pyautogui.keyDown(key)
+                pressed_keys.add(key)
+            elif value == 0 and key in pressed_keys:
+                pyautogui.keyUp(key)
+                pressed_keys.remove(key)
+        # else: ignora outros axis
 
-
-
+#----------------------------------------------------------------------#
+# GUI Tkinter
+#----------------------------------------------------------------------#
+def conectar_porta(port_name, root, botao, status_label, mudar_cor):
+    if not port_name:
+        messagebox.showwarning("Aviso", "Selecione uma porta antes de conectar.")
+        return
+    try:
+        ser = serial.Serial(port_name, 115200, timeout=1)
+        status_label.config(text=f"Conectado em {port_name}", foreground="green")
+        mudar_cor("green")
+        botao.config(text="Desconectar")
+        root.update()
+        controle(ser)
+    except Exception as e:
+        messagebox.showerror("Erro de Conexão", f"Não foi possível conectar em {port_name}.\n{e}")
+        mudar_cor("red")
+    finally:
+        try:
+            ser.close()
+        except:
+            pass
+        status_label.config(text="Conexão encerrada.", foreground="red")
+        mudar_cor("red")
+        botao.config(text="Conectar")
 
 def criar_janela():
     root = tk.Tk()
-    root.title("Controle de Mouse")
-    root.geometry("400x250")
+    root.title("Controle Arcade")
+    root.geometry("400x260")
     root.resizable(False, False)
 
-    # Dark mode color settings
     dark_bg = "#2e2e2e"
     dark_fg = "#ffffff"
-    accent_color = "#007acc"
+    accent = "#007acc"
     root.configure(bg=dark_bg)
 
     style = ttk.Style(root)
     style.theme_use("clam")
-    style.configure("TFrame", background=dark_bg)
-    style.configure("TLabel", background=dark_bg, foreground=dark_fg, font=("Segoe UI", 11))
-    style.configure("TButton", font=("Segoe UI", 10, "bold"),
-                    foreground=dark_fg, background="#444444", borderwidth=0)
-    style.map("TButton", background=[("active", "#555555")])
-    style.configure("Accent.TButton", font=("Segoe UI", 12, "bold"),
-                    foreground=dark_fg, background=accent_color, padding=6)
-    style.map("Accent.TButton", background=[("active", "#005f9e")])
+    style.configure("TFrame",      background=dark_bg)
+    style.configure("TLabel",      background=dark_bg, foreground=dark_fg, font=("Segoe UI",11))
+    style.configure("TButton",     foreground=dark_fg, background="#444444", borderwidth=0, font=("Segoe UI",10,"bold"))
+    style.map("TButton",           background=[("active","#555555")])
+    style.configure("Accent.TButton", foreground=dark_fg, background=accent, font=("Segoe UI",12,"bold"), padding=6)
+    style.map("Accent.TButton",    background=[("active","#005f9e")])
+    style.configure("TCombobox", fieldbackground=dark_bg, background=dark_bg, foreground=dark_fg, padding=4)
+    style.map("TCombobox", fieldbackground=[("readonly",dark_bg)])
 
-    # Updated combobox styling to match the dark GUI color
-    style.configure("TCombobox",
-                    fieldbackground=dark_bg,
-                    background=dark_bg,
-                    foreground=dark_fg,
-                    padding=4)
-    style.map("TCombobox", fieldbackground=[("readonly", dark_bg)])
+    frame = ttk.Frame(root, padding=20)
+    frame.pack(expand=True, fill="both")
 
-    # Main content frame (upper portion)
-    frame_principal = ttk.Frame(root, padding="20")
-    frame_principal.pack(expand=True, fill="both")
+    ttk.Label(frame, text="Selecione a porta serial:").pack(anchor="w")
+    porta_var = tk.StringVar()
+    portas = serial_ports()
+    cb = ttk.Combobox(frame, textvariable=porta_var, values=portas, state="readonly", width=15)
+    if portas: porta_var.set(portas[0])
+    cb.pack(pady=(0,10))
 
-    titulo_label = ttk.Label(frame_principal, text="Controle", font=("Segoe UI", 14, "bold"))
-    titulo_label.pack(pady=(0, 10))
+    status_label = ttk.Label(frame, text="Status: desconectado", font=("Segoe UI",10))
+    status_label.pack(pady=(0,5))
 
-    porta_var = tk.StringVar(value="")
+    botao = ttk.Button(frame, text="Conectar", style="Accent.TButton",
+                       command=lambda: conectar_porta(porta_var.get(), root, botao, status_label, mudar_cor_circulo))
+    botao.pack()
 
-    botao_conectar = ttk.Button(
-        frame_principal,
-        text="Conectar e Iniciar Leitura",
-        style="Accent.TButton",
-        command=lambda: conectar_porta(porta_var.get(), root, botao_conectar, status_label, mudar_cor_circulo)
-    )
-    botao_conectar.pack(pady=10)
-
-    # Create footer frame with grid layout to host status label, port dropdown, and status circle
-    footer_frame = tk.Frame(root, bg=dark_bg)
-    footer_frame.pack(side="bottom", fill="x", padx=10, pady=(10, 0))
-
-    # Left: Status label
-    status_label = tk.Label(footer_frame, text="Aguardando seleção de porta...", font=("Segoe UI", 11),
-                            bg=dark_bg, fg=dark_fg)
-    status_label.grid(row=0, column=0, sticky="w")
-
-    # Center: Port selection dropdown
-    portas_disponiveis = serial_ports()
-    if portas_disponiveis:
-        porta_var.set(portas_disponiveis[0])
-    port_dropdown = ttk.Combobox(footer_frame, textvariable=porta_var,
-                                 values=portas_disponiveis, state="readonly", width=10)
-    port_dropdown.grid(row=0, column=1, padx=10)
-
-    # Right: Status circle (canvas)
-    circle_canvas = tk.Canvas(footer_frame, width=20, height=20, highlightthickness=0, bg=dark_bg)
-    circle_item = circle_canvas.create_oval(2, 2, 18, 18, fill="red", outline="")
-    circle_canvas.grid(row=0, column=2, sticky="e")
-
-    footer_frame.columnconfigure(1, weight=1)
-
+    footer = tk.Frame(root, bg=dark_bg)
+    footer.pack(side="bottom", fill="x", padx=10, pady=10)
+    circle = tk.Canvas(footer, width=20, height=20, bg=dark_bg, highlightthickness=0)
+    circle_item = circle.create_oval(2,2,18,18, fill="red")
+    circle.pack(side="right")
     def mudar_cor_circulo(cor):
-        circle_canvas.itemconfig(circle_item, fill=cor)
+        circle.itemconfig(circle_item, fill=cor)
 
     root.mainloop()
-
-
-
-
 
 if __name__ == "__main__":
     criar_janela()
